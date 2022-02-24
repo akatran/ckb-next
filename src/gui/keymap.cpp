@@ -1468,7 +1468,6 @@ int KeyMap::modelWidth(Model model){
     case IRONCLAW:
     case NIGHTSWORD:
     case GLAIVEPRO:
-        return M65_WIDTH;
     case IRONCLAW_W:
         return M65_WIDTH;
     default:
