@@ -811,7 +811,7 @@ void process_input_urb(void* context, unsigned char* buffer, int urblen, ushort 
                             }
                         }
                     } else if(firstbyte == NKRO_KEY_IN || firstbyte == NKRO_MEDIA_IN) {
-                        if(!targetkb->active)
+                        if(!targetkb->active || (firstbyte == NKRO_MEDIA_IN && BRAGI_HAS_MEDIA_MACRO(targetkb)))
                             handle_bragi_key_input(targetkb->input.keys, buffer, urblen);
                     } else {
                         ckb_err("Unknown bragi data received in input thread %02x from endpoint %02x", firstbyte, ep);
