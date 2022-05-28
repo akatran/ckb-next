@@ -5,6 +5,7 @@
 #include "input.h"
 #include "bragi_proto.h"
 #include "nxp_proto.h"
+#include "bragi_notification.h"
 
 // Translates input from HID to a ckb input bitfield.
 static void hid_kb_translate(unsigned char* kbinput, int length, const unsigned char* urbinput, int legacy);
@@ -261,7 +262,8 @@ const key keymap[N_KEYS_EXTENDED] = {
     { 0,            -1,   KEY_NONE },
     { 0,            -1,   KEY_NONE },
     { "profdn",     -1, KEY_CORSAIR },
-    { "profswitch", -1, KEY_CORSAIR },
+    { 0,            -1,   KEY_NONE }, // "profswitch" lives here for mice, however it's patched in manually
+                                      // as the keyboard profswitch interferes and needs to be disabled first
 
     // Extended mouse buttons (wheel is an axis in HW, 6-8 are recognized by the OS but not present in HW)
     { "wheelup",    -1, SCAN_MOUSE | BTN_WHEELUP },
@@ -607,7 +609,7 @@ void process_input_urb(void* context, unsigned char* buffer, int urblen, ushort 
                 targetkb = kb->children[0];
 #ifdef DEBUG_USB_INPUT
             else
-                ckb_err("kb->children[0] is NULL");
+                ckb_err("kb->children[0] is NULL. This is expected if a bragi WL device was just turned off.");
 #endif
         }
         pthread_mutex_unlock(cmutex(kb));
@@ -628,10 +630,8 @@ void process_input_urb(void* context, unsigned char* buffer, int urblen, ushort 
         if(retval)
             ckb_fatal("Error unlocking interrupt mutex %i", retval);
     } else if (kb->protocol == PROTO_BRAGI && urblen == kb->out_ep_packet_size && buffer[1] == BRAGI_INPUT_NOTIFY){
-        // Handle bragi notifications here
-#ifdef DEBUG_USB_INPUT
-        ckb_info("Detected bragi notification");
-#endif
+        // Process bragi notifications
+        bragi_process_notification(kb, targetkb, buffer);
     } else {
         queued_mutex_lock(imutex(targetkb));
 

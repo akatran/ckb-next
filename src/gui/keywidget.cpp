@@ -32,6 +32,7 @@ void KeyWidget::map(const KeyMap& newMap){
     else if(keyMap.isMousepad())
         _aspectRatio += 0.35;
     update();
+    updateGeometry();
 }
 
 void KeyWidget::drawInfo(float& scale, float& offsetX, float& offsetY, int ratio){
@@ -123,12 +124,12 @@ void KeyWidget::paintEvent(QPaintEvent*){
             if(!scimOverlay)
                 scimOverlay = new QImage(":/img/overlay_scimitar.png");
             overlay = scimOverlay;
-            xpos = 3.5f;
+            xpos = 10.3f;
         } else if(model == KeyMap::HARPOON){
             if(!harpOverlay)
                 harpOverlay = new QImage(":/img/overlay_harpoon.png");
             overlay = harpOverlay;
-            xpos = 3.5f;
+            xpos = 4.3f;
         } else if(model == KeyMap::GLAIVE){
             if(!glaiveOverlay)
                 glaiveOverlay = new QImage(":/img/overlay_glaive.png");
@@ -143,7 +144,7 @@ void KeyWidget::paintEvent(QPaintEvent*){
             if(!katarOverlay)
                 katarOverlay = new QImage(":/img/overlay_katar.png");
             overlay = katarOverlay;
-            xpos = 3.5f;
+            xpos = 3.7f;
             ypos = -2.f;
         } else if(model == KeyMap::DARKCORE){
             if(!darkCoreOverlay)
@@ -162,7 +163,7 @@ void KeyWidget::paintEvent(QPaintEvent*){
             if(!m95Overlay)
                 m95Overlay = new QImage(":/img/overlay_m95.png");
             overlay = m95Overlay;
-            xpos = 2.f;
+            xpos = 35.3f;
         } else if(model == KeyMap::IRONCLAW){
             if(!ironclawOverlay)
                 ironclawOverlay = new QImage(":/img/overlay_ironclaw.png");
@@ -182,7 +183,7 @@ void KeyWidget::paintEvent(QPaintEvent*){
             if(!m55Overlay)
                 m55Overlay = new QImage(":/img/overlay_m55.png");
             overlay = m55Overlay;
-            xpos = 2.f;
+            xpos = 5.7f;
         }
 
         if(!overlay){
@@ -302,7 +303,6 @@ void KeyWidget::paintEvent(QPaintEvent*){
             if(!strcmp(key.name, "enter")){
                 if(key.height == 24){
                     // ISO enter key isn't rectangular
-                    y = key.y + 1.f;
                     h = 10.f;
                     bgPainter.drawRect(QRectF((x + w - 13.f) * scale, y * scale, 13.f * scale, 22.f * scale));
                 } else {

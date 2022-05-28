@@ -9,6 +9,8 @@
 #define BRAGI_CLOSE_HANDLE  0x05
 #define BRAGI_WRITE_DATA    0x06
 #define BRAGI_CONTINUE_WRITE 0x07
+#define BRAGI_READ_DATA     0x08
+#define BRAGI_PROBE_HANDLE  0x09
 #define BRAGI_OPEN_HANDLE   0x0d
 
 // What to get/set
@@ -16,6 +18,10 @@
 #define BRAGI_BRIGHTNESS    0x02
 #define BRAGI_MODE          0x03
 #define BRAGI_ANGLE_SNAP    0x07
+#define BRAG_APP_VER        0x13
+#define BRAG_BLD_VER        0x14
+#define BRAG_RADIO_APP_VER  0x15
+#define BRAG_RADIO_BLD_VER  0x16
 #define BRAGI_DPI_INDEX     0x1E
 #define BRAGI_DPI_MASK      0x1F
 #define BRAGI_DPI_X         0x21
@@ -52,10 +58,17 @@
 
 // ckb-specific macros
 #define BRAGI_LIGHTING_HANDLE 0x00
+#define BRAGI_GENERIC_HANDLE  0x01 // This is used for quick read/writes. Do NOT leave it open.
 
 // HID input (2 bytes)
 #define BRAGI_INPUT_0       0x00
 #define BRAGI_INPUT_NOTIFY  0x01
 #define BRAGI_INPUT_HID     0x02
+
+// Notification IDs
+#define BRAGI_NOTIFICATION_CONNECTIONSTATUS 0x36
+
+// Errors
+#define BRAGI_ERROR_NOTSUPPORTED 0x05
 
 #endif // BRAGI_PROTO_H

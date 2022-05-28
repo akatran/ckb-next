@@ -46,6 +46,7 @@ const device_desc models[] = {
     { V_CORSAIR, P_K55, },
     { V_CORSAIR, P_K60_PRO_RGB, },
     { V_CORSAIR, P_K60_PRO_RGB_LP, },
+    { V_CORSAIR, P_K60_PRO_RGB_SE, },
     { V_CORSAIR, P_K63_NRGB, },
     { V_CORSAIR, P_K63_NRGB_WL, },
     { V_CORSAIR, P_K63_NRGB_WL2, },
@@ -191,9 +192,11 @@ const char* product_str(ushort product){
         return "k65";
     if(product == P_K66)
         return "k66";
-    if(product == P_K63_NRGB || product == P_K63_NRGB_WL || product == P_K63_NRGB_WL2 || product == P_K63_NRGB_WL3 || product == P_K63_NRGB_WL4)
+    if(product == P_K63_NRGB)
         return "k63";
-    if(product == P_K60_PRO_RGB || product == P_K60_PRO_RGB_LP)
+    if(product == P_K63_NRGB_WL || product == P_K63_NRGB_WL2 || product == P_K63_NRGB_WL3 || product == P_K63_NRGB_WL4)
+        return "k63_wireless";
+    if(product == P_K60_PRO_RGB || product == P_K60_PRO_RGB_LP || product == P_K60_PRO_RGB_SE)
         return "k60";
     if(product == P_K57_U || product == P_K57_D)
         return "k57_wireless";
@@ -256,7 +259,6 @@ const char* product_str(ushort product){
 /// \todo Is the last point really a good decision and always correct?
 ///
 static const devcmd* get_vtable(usbdevice* kb){
-    // return IS_MOUSE(vendor, product) ? &vtable_mouse : !IS_LEGACY(vendor, product) ? &vtable_keyboard : &vtable_keyboard_nonrgb;
     ushort vendor = kb->vendor;
     ushort product = kb->product;
     if(kb->protocol == PROTO_BRAGI) {
@@ -429,12 +431,15 @@ static void* _setupusb(void* context){
     if(IS_MONOCHROME(vendor, product))
         kb->features |= FEAT_MONOCHROME;
     if(IS_DONGLE(kb))
-        kb->features |= FEAT_DONGLE;
+        kb->features |= (FEAT_DONGLE | FEAT_FWVERSION);
     if(IS_WIRELESS_DEV(kb)){
         kb->features |= FEAT_WIRELESS;
         if((kb->protocol == PROTO_BRAGI && !IS_DONGLE(kb)) || kb->protocol != PROTO_BRAGI)
             kb->features |= FEAT_BATTERY;
     }
+    // Disable FWUPDATE for all bragi devices
+    if(kb->protocol == PROTO_BRAGI)
+        kb->features &= ~FEAT_FWUPDATE;
 
     kb->usbdelay = USB_DELAY_DEFAULT;
 
@@ -578,9 +583,7 @@ static void* _setupusb(void* context){
     int index = INDEX_OF(kb, keyboard);
     ckb_info("Setup finished for %s%d", devpath, index);
     kb->status = DEV_STATUS_CONNECTED;
-    queued_mutex_unlock(dmutex(kb));
     updateconnected(kb);
-    queued_mutex_lock(dmutex(kb));
 
     ///
     /// devmain()'s return value is returned by _setupusb() when we terminate.
@@ -824,64 +827,69 @@ int _usbrecv(usbdevice* kb, void* out_msg, size_t msg_len, uchar* in_msg, const 
 ///
 int closeusb(usbdevice* kb){
     kb->status = DEV_STATUS_DISCONNECTING;
+    const int index = INDEX_OF(kb, keyboard);
+    ckb_info("Disconnecting %s%d", devpath, index);
+    updateconnected(kb);
+
+    // If the device has children, disconnect them first
+    pthread_mutex_lock(cmutex(kb));
+    for(int i = 0; i < MAX_CHILDREN; i++){
+        if(!kb->children[i])
+            continue;
+        queued_mutex_lock(dmutex(kb->children[i]));
+        closeusb(kb->children[i]);
+        queued_mutex_unlock(dmutex(kb->children[i]));
+        kb->children[i] = NULL;
+    }
+
     queued_mutex_lock(imutex(kb));
-    if(kb->handle){
-        int index = INDEX_OF(kb, keyboard);
-        ckb_info("Disconnecting %s%d", devpath, index);
-        os_inputclose(kb);
+    os_inputclose(kb);
+
+    // Close USB device
+    os_closeusb(kb);
+    rmdevpath(kb);
+
+    // Wait for threads to close
+    if(kb->pollthread || kb->thread){
         queued_mutex_unlock(imutex(kb));
         queued_mutex_unlock(dmutex(kb));
 
         // Shut down the device polling thread
         if(kb->pollthread){
+            // Unlock dmutex to allow pollthread to quit
             pthread_kill(*kb->pollthread, SIGUSR2);
             pthread_join(*kb->pollthread, NULL);
             free(kb->pollthread);
             kb->pollthread = NULL;
         }
 
-        updateconnected(kb);
-        queued_mutex_lock(dmutex(kb));
-        queued_mutex_lock(imutex(kb));
-        // Close USB device
-        os_closeusb(kb);
-    } else {
-        queued_mutex_unlock(imutex(kb));
-        queued_mutex_unlock(dmutex(kb));
-        updateconnected(kb);
+        if(kb->thread){
+            if(pthread_equal(pthread_self(), kb->thread)){
+#ifdef DEBUG_MUTEX
+                ckb_info("Attempted to pthread_join() self. Detaching instead.");
+#endif
+                int detachres = pthread_detach(kb->thread);
+                if(detachres)
+                    ckb_err("pthread_detach() returned %s (%d)", strerror(detachres), detachres);
+            } else {
+#ifdef DEBUG_MUTEX
+                ckb_info("Joining thread 0x%lx for ckb%d by thread 0x%lx", kb->thread, INDEX_OF(kb, keyboard), pthread_self());
+#endif
+                int joinres = pthread_join(kb->thread, NULL);
+                if(joinres)
+                    ckb_err("pthread_join() returned %s (%d)", strerror(joinres), joinres);
+            }
+        }
         queued_mutex_lock(dmutex(kb));
         queued_mutex_lock(imutex(kb));
     }
-    rmdevpath(kb);
 
-    // Wait for thread to close
-    queued_mutex_unlock(imutex(kb));
-    queued_mutex_unlock(dmutex(kb));
-
-    if(pthread_equal(pthread_self(), kb->thread)){
-#ifdef DEBUG_MUTEX
-        ckb_info("Attempted to pthread_join() self. Detaching instead.");
-#endif
-        int detachres = pthread_detach(kb->thread);
-        if(detachres)
-            ckb_err("pthread_detach() returned %s (%d)", strerror(detachres), detachres);
-    } else {
-#ifdef DEBUG_MUTEX
-        ckb_info("Joining thread 0x%lx for ckb%d by thread 0x%lx", kb->thread, INDEX_OF(kb, keyboard), pthread_self());
-#endif
-        int joinres = pthread_join(kb->thread, NULL);
-        if(joinres)
-            ckb_err("pthread_join() returned %s (%d)", strerror(joinres), joinres);
-    }
-    queued_mutex_lock(dmutex(kb));
-
-    // Delete the profile and the control path
-    if(!kb->vtable.freeprofile)
-        return 0;
-    kb->vtable.freeprofile(kb);
-    queued_mutex_lock(imutex(kb));
+    // Delete the profile
+    if(kb->vtable.freeprofile)
+        kb->vtable.freeprofile(kb);
     // This implicitly sets the status to STATUS_DISCONNECTED
     memset(kb, 0, sizeof(usbdevice));
+    pthread_mutex_unlock(cmutex(kb));
     queued_mutex_unlock(imutex(kb));
     return 0;
 }

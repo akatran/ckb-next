@@ -88,49 +88,41 @@ void check_chmod(const char *pathname, mode_t mode){
 ///
 /// \brief _updateconnected Update the list of connected devices.
 ///
-/// \<devicepath\> normally is /dev/input/ckb or /input/ckb.
-/// \n Open the normal file under \<devicepath\>0/connected for writing.
-/// For each device connected, print its devicepath+number,
-/// the serial number of the usb device and the usb name of the device connected to that usb interface.
-/// \n eg:
-/// \n /dev/input/ckb1 0F022014ABABABABABABABABABABA999 Corsair K95 RGB Gaming Keyboard
-/// \n /dev/input/ckb2 0D02303DBACBACBACBACBACBACBAC998 Corsair M65 RGB Gaming Mouse
-///
-/// Set the file ownership to root.
-/// If the glob var gid is explicitly set to something different from -1 (the initial value), set file permission to 640, else to 644.
-/// This is used if you start the daemon with --gid=\<GID\> Parameter.
-///
-/// Because several independent threads may call updateconnected(), protect that procedure with locking/unlocking of \b devmutex.
-///
+/// Keeps track of device state separately (so that there's no need to lock every single dmutex)
+/// dmutex for kb should already be locked before calling this
 void _updateconnected(usbdevice* kb){
     queued_mutex_lock(devmutex);
+    static char names[DEV_MAX][KB_NAME_LEN] = {{0}};
+    static char serials[DEV_MAX][SERIAL_LEN] = {{0}};
+
     char cpath[DEVPATH_LEN + 12];
     snprintf(cpath, sizeof(cpath), "%s0/connected", devpath);
     FILE* cfile = fopen(cpath, "w");
     if(!cfile){
-        ckb_warn("Unable to update %s: %s", cpath, strerror(errno));
+        ckb_err("Unable to open %s: %s", cpath, strerror(errno));
         queued_mutex_unlock(devmutex);
         return;
     }
-    int written = 0;
+
+    // Don't write anything if we just want to create the paths
     if(kb != keyboard){
-        for(int i = 1; i < DEV_MAX; i++){
-#ifdef DEBUG_MUTEX
-            ckb_info("Locking ckb%d in _updateconnected()", i);
-#endif
-            queued_mutex_lock(devmutex + i);
-            if((keyboard + i)->status == DEV_STATUS_CONNECTED){
-                written = 1;
-                fprintf(cfile, "%s%d %s %s\n", devpath, i, keyboard[i].serial, keyboard[i].name);
-            }
-#ifdef DEBUG_MUTEX
-            ckb_info("Unlocking ckb%d in _updateconnected()", i);
-#endif
-            queued_mutex_unlock(devmutex + i);
+        const int index = INDEX_OF(kb, keyboard);
+
+        // Update the arrays with the status of the devices
+        if(kb->status == DEV_STATUS_CONNECTED){
+            strcpy(names[index], kb->name);
+            strcpy(serials[index], kb->serial);
+        } else {
+            names[index][0] = '\0';
+            serials[index][0] = '\0';
         }
-    }
-    if(!written)
+
+        for(int i = 1; i < DEV_MAX; i++)
+            if(serials[i][0])
+                fprintf(cfile, "%s%d %s %s\n", devpath, i, serials[i], names[i]);
         fputc('\n', cfile);
+    }
+
     fclose(cfile);
 
     check_chmod(cpath, S_GID_READ);
@@ -316,6 +308,9 @@ static int _mkdevpath(usbdevice* kb){
         printnode(dpath, dpistr);
 
         // Write the device's features
+        // NOTE: Features that have their own files, which can be blank to indicate lack of support should NOT be added here.
+        // It is implied that if the file is blank or does not exist, then the feature is not supported.
+        // FIXME: Apply this to pollrate
         char fpath[sizeof(path) + 9];
         snprintf(fpath, sizeof(fpath), "%s/features", path);
         FILE* ffile = fopen(fpath, "w");
@@ -333,8 +328,6 @@ static int _mkdevpath(usbdevice* kb){
                 fputs(" bind", ffile);
             if(HAS_FEATURES(kb, FEAT_NOTIFY))
                 fputs(" notify", ffile);
-            if(HAS_FEATURES(kb, FEAT_FWVERSION))
-                fputs(" fwversion", ffile);
             if(HAS_FEATURES(kb, FEAT_FWUPDATE))
                 fputs(" fwupdate", ffile);
             if(HAS_FEATURES(kb, FEAT_HWLOAD))
@@ -394,13 +387,49 @@ int rmdevpath(usbdevice* kb){
     return 0;
 }
 
+static inline uchar FWBcdToBin(const uchar v){
+    return ((v >> 4) * 10) + (v & 0xF);
+}
+
+static inline void FWtoThreeSegments(FILE* fwfile, uint32_t ver, usbdevice* kb){
+    // If the device doesn't support reading fw ver, or the version is UINT32_MAX (which means we couldn't read the version), leave blank
+    // Latter happens when trying to request a bragi radio version for a device that doesn't have one
+    // 0 is a valid fw version (when app is corrupt)
+    if(!HAS_FEATURES(kb, FEAT_FWVERSION) || ver == UINT32_MAX)
+        return;
+
+    // NXP/Legacy devices use BCD, but also bragi devices if we can't read the fw ver (and only have bcdDevice)
+    // At the moment we overwrite the bcdDevice for bragi, so we do not need to handle it
+    // If in the future we encounter a bragi device which does not report an APP fw ver, this will need to be changed
+    if(kb->protocol == PROTO_BRAGI)
+        fprintf(fwfile, "%hhu.%hhu.%hhu", ver >> 16 & 0xFF, ver >> 8 & 0xFF, ver & 0xFF);
+    else
+        fprintf(fwfile, "%hhu.%hhu", FWBcdToBin(ver >> 8 & 0xFF), FWBcdToBin(ver & 0xFF));
+}
+
 int mkfwnode(usbdevice* kb){
     int index = INDEX_OF(kb, keyboard);
     char fwpath[DEVPATH_LEN + 12];
     snprintf(fwpath, sizeof(fwpath), "%s%d/fwversion", devpath, index);
     FILE* fwfile = fopen(fwpath, "w");
     if(fwfile){
-        fprintf(fwfile, "%04x", kb->fwversion);
+        // Start with APP ver
+        FWtoThreeSegments(fwfile, kb->fwversion, kb);
+        fputc('\n', fwfile);
+
+        // Followed by BLD ver
+        FWtoThreeSegments(fwfile, kb->bldversion, kb);
+        fputc('\n', fwfile);
+
+        // Followed by WL radio APP ver
+        FWtoThreeSegments(fwfile, kb->radioappversion, kb);
+        fputc('\n', fwfile);
+
+        // Followed by WL radio BLD ver
+        FWtoThreeSegments(fwfile, kb->radiobldversion, kb);
+        fputc('\n', fwfile);
+
+        // Closing newline
         fputc('\n', fwfile);
         fclose(fwfile);
         check_chmod(fwpath, S_GID_READ);
